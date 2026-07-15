@@ -1,88 +1,51 @@
-
-
-
-
-
 import { SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import { logger } from '../../utils/logger.js';
-import { handleInteractionError, TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
-import { getLeaderboard, getLevelingConfig, getXpForLevel } from '../../services/leveling.js';
-
+import { handleInteractionError } from '../../utils/errorHandler.js';
+import { db } from '../../database.js'; // استبدل بمسار قاعدة بياناتك الصحيح
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+
 export default {
   data: new SlashCommandBuilder()
     .setName('leaderboard')
-    .setDescription("Shows the server's level leaderboard")
+    .setDescription("عرض قائمة المتصدرين في السيرفر")
     .setDMPermission(false),
   category: 'Leveling',
-
-  
-
-
-
-
 
   async execute(interaction, config, client) {
     try {
       await InteractionHelper.safeDefer(interaction);
 
-      const levelingConfig = await getLevelingConfig(client, interaction.guildId);
-
-      if (!levelingConfig?.enabled) {
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [
-            new EmbedBuilder()
-              .setColor('#f1c40f')
-              .setDescription('The leveling system is currently disabled on this server.')
-          ],
-          flags: MessageFlags.Ephemeral
-        });
-        return;
-      }
-
-      const leaderboard = await getLeaderboard(client, interaction.guildId, 10);
-
-      if (leaderboard.length === 0) {
-        throw new TitanBotError(
-          'No leaderboard data found',
-          ErrorTypes.DATABASE,
-          'No level data found yet. Start chatting to gain XP!'
-        );
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle('🏆 Level Leaderboard')
-        .setColor('#2ecc71')
-        .setDescription("Top 10 most active members in this server:")
-        .setTimestamp();
-
-      const leaderboardText = await Promise.all(
-        leaderboard.map(async (user, index) => {
-          try {
-            const member = await interaction.guild.members.fetch(user.userId).catch(() => null);
-            const userMention = member?.user.toString() || `<@${user.userId}>`;
-            const xpForNextLevel = getXpForLevel(user.level + 1);
-
-            let rankPrefix = `${index + 1}.`;
-            if (index === 0) rankPrefix = '🥇';
-            else if (index === 1) rankPrefix = '🥈';
-            else if (index === 2) rankPrefix = '🥉';
-            else rankPrefix = `**${index + 1}.**`;
-
-            return `${rankPrefix} ${userMention} - Level ${user.level} (${user.xp}/${xpForNextLevel} XP)`;
-          } catch {
-            return `**${index + 1}.** Error loading user ${user.userId}`;
-          }
-        })
+      // جلب بيانات المتصدرين من الجدول مباشرة
+      const textQuery = await db.query(
+        'SELECT user_id, text_xp FROM users_xp WHERE guild_id = $1 ORDER BY text_xp DESC LIMIT 5', 
+        [interaction.guildId]
+      );
+      const voiceQuery = await db.query(
+        'SELECT user_id, voice_xp FROM users_xp WHERE guild_id = $1 ORDER BY voice_xp DESC LIMIT 5', 
+        [interaction.guildId]
       );
 
-      embed.addFields({
-        name: 'Rankings',
-        value: leaderboardText.join('\n')
-      });
+      // تنسيق النصوص بناءً على طلبك (XP فقط)
+      const textLeaderboard = textQuery.rows.length === 0 
+        ? 'لا يوجد بيانات كافية' 
+        : textQuery.rows.map((row, index) => `🔸 | #${index + 1} <@!${row.user_id}> - XP: **${Math.floor(row.text_xp)}**`).join('\n');
+
+      const voiceLeaderboard = voiceQuery.rows.length === 0 
+        ? 'لا يوجد بيانات كافية' 
+        : voiceQuery.rows.map((row, index) => `🔸 | #${index + 1} <@!${row.user_id}> - XP: **${Math.floor(row.voice_xp)}**`).join('\n');
+
+      const embed = new EmbedBuilder()
+        .setTitle('🏆 قائمة المتصدرين')
+        .setColor('#2ecc71')
+        .addFields(
+          { name: '<:voice:1311747451778105415> TOP TEXT', value: textLeaderboard, inline: false },
+          { name: '<:voice:1311747444941258834> TOP VOICE', value: voiceLeaderboard, inline: false }
+        )
+        .setFooter({ text: 'Nova bot' })
+        .setTimestamp();
 
       await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
-      logger.debug(`Leaderboard displayed for guild ${interaction.guildId}`);
+      
     } catch (error) {
       logger.error('Leaderboard command error:', error);
       await handleInteractionError(interaction, error, {
@@ -92,6 +55,3 @@ export default {
     }
   }
 };
-
-
-
